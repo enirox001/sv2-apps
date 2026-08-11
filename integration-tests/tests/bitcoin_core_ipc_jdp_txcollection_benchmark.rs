@@ -45,6 +45,11 @@ async fn jdp_txcollection_latency_v32x() {
     let funded_address = bitcoin_core
         .fund_wallet_legacy()
         .expect("failed to fund benchmark wallet");
+    // Large runs need enough mature UTXOs to avoid benchmarking the wallet's
+    // unconfirmed-transaction-chain limit instead of TxCollection.
+    if sample_count > DEFAULT_SAMPLES {
+        bitcoin_core.generate_blocks(sample_count);
+    }
     let next_height = u32::try_from(
         bitcoin_core
             .get_blockchain_info()
