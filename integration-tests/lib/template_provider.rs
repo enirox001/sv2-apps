@@ -1,5 +1,6 @@
 use corepc_node::{types::GetBlockchainInfo, Conf, ConnectParams, Node};
 use std::{
+    collections::BTreeMap,
     env,
     fs::create_dir_all,
     path::PathBuf,
@@ -7,7 +8,7 @@ use std::{
 };
 use stratum_apps::{
     bitcoin_core_sv2::common::BitcoinCoreVersion,
-    stratum_core::bitcoin::{Address, Amount, Txid},
+    stratum_core::bitcoin::{consensus::deserialize, Address, Amount, Transaction, Txid},
 };
 use tracing::warn;
 
@@ -363,6 +364,56 @@ impl BitcoinCore {
             .txid()
             .expect("Unexpected behavior: txid is None");
         Ok((address, txid))
+    }
+
+    /// Create and wallet-sign a transaction without broadcasting it.
+    pub fn create_signed_mempool_transaction(&self) -> Result<Transaction, String> {
+        let client = &self.bitcoind.client;
+        let address = client
+            .new_address()
+            .map_err(|e| format!("failed to get transaction destination address: {e}"))?;
+        let outputs = BTreeMap::from([(address.to_string(), 0.01)]);
+        let unsigned = client
+            .create_raw_transaction(&[], &outputs)
+            .map_err(|e| format!("createrawtransaction failed: {e}"))?;
+        let funded = client
+            .fund_raw_transaction(&unsigned.0)
+            .map_err(|e| format!("fundrawtransaction failed: {e}"))?;
+        let signed = client
+            .sign_raw_transaction_with_wallet(&funded.hex)
+            .map_err(|e| format!("signrawtransactionwithwallet failed: {e}"))?;
+
+        if !signed.complete {
+            return Err(format!(
+                "signrawtransactionwithwallet returned an incomplete transaction: {:?}",
+                signed.errors
+            ));
+        }
+
+        let bytes = hex::decode(&signed.hex)
+            .map_err(|e| format!("failed to decode signed transaction hex: {e}"))?;
+        deserialize(&bytes).map_err(|e| format!("failed to deserialize signed transaction: {e}"))
+    }
+
+    /// Broadcast a prepared transaction using Bitcoin Core's `sendrawtransaction` RPC.
+    pub fn send_raw_transaction(&self, transaction: &Transaction) -> Result<Txid, String> {
+        let expected_txid = transaction.compute_txid();
+        let response = self
+            .bitcoind
+            .client
+            .send_raw_transaction(transaction)
+            .map_err(|e| format!("sendrawtransaction failed: {e}"))?;
+        let returned_txid = response
+            .0
+            .parse::<Txid>()
+            .map_err(|e| format!("sendrawtransaction returned an invalid txid: {e}"))?;
+
+        if returned_txid != expected_txid {
+            return Err(format!(
+                "sendrawtransaction returned {returned_txid}, expected {expected_txid}"
+            ));
+        }
+        Ok(returned_txid)
     }
 
     /// Fund the node's wallet.

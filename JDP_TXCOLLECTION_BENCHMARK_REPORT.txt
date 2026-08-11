@@ -1,0 +1,21 @@
+TxCollection JDP benchmark
+
+20 samples, release build, local regtest node.
+sv2-apps #599 at 31d3c510; Bitcoin Core #35671 at d0c20776.
+
+Old mempool mirror (sendrawtransaction -> JDP success):
+Core 30: mean 995.779 ms, p50 995.597, p95 1004.300
+Core 31: mean 995.455 ms, p50 996.340, p95 1000.442
+
+TxCollection, transaction already in the node mempool:
+sendrawtransaction: mean 1.796 ms, p50 1.680, p95 2.365
+collectTxs + makeTemplate: mean 2.269 ms, p50 2.090, p95 3.087
+end-to-end: mean 4.066 ms, p50 3.671, p95 5.247
+
+TxCollection, transaction missing from the node mempool:
+unknownTxPos: mean 1.144 ms, p50 1.068, p95 1.451
+addMissingTxs + makeTemplate: mean 1.963 ms, p50 1.908, p95 2.428
+combined: mean 3.108 ms, p50 3.007, p95 3.794
+
+The mempool-hit path was about 245x faster than the old mirror path in this run.
+The missing-transaction result does not include miner-to-JDS network latency.
