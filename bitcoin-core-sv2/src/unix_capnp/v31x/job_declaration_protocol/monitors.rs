@@ -3,6 +3,7 @@
 
 use crate::unix_capnp::v31x::job_declaration_protocol::BitcoinCoreSv2JDP;
 use bitcoin_capnp_types_v31::capnp;
+use std::time::Instant;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, warn};
 
@@ -66,6 +67,7 @@ impl BitcoinCoreSv2JDP {
                 // expected cadence of template updates.
                 wait_next_request_options.set_timeout(3_000.0);
 
+                let wait_started = Instant::now();
                 tokio::select! {
                     _ = self_clone.cancellation_token.cancelled() => {
                         debug!("Interrupting waitNext request");
@@ -79,6 +81,8 @@ impl BitcoinCoreSv2JDP {
                     wait_next_request_response = wait_next_request.send().promise => {
                         match wait_next_request_response {
                             Ok(response) => {
+                                let wait_elapsed = wait_started.elapsed();
+                                let refresh_started = Instant::now();
                                 let result = match response.get() {
                                     Ok(result) => result,
                                     Err(e) => {
@@ -131,6 +135,12 @@ impl BitcoinCoreSv2JDP {
                                     error!("Failed to update mempool mirror: {:?}", e);
                                     self_clone.cancellation_token.cancel();
                                     break;
+                                } else {
+                                    debug!(
+                                        wait_next_ms = wait_elapsed.as_secs_f64() * 1_000.0,
+                                        post_wait_refresh_ms = refresh_started.elapsed().as_secs_f64() * 1_000.0,
+                                        "JDP waitNext-to-mirror timing"
+                                    );
                                 }
                             }
                             Err(e) => {

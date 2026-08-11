@@ -1,0 +1,38 @@
+Benchmarked the current JDS mempool mirror to get a baseline before testing the
+TxCollection approach.
+
+For each sample, I created and signed a transaction, started the timer before
+sendrawtransaction, then waited until the JDS found its wtxid through the
+waitNext -> getBlock -> mempool mirror path. Transaction creation and signing
+were not timed.
+
+20 samples, release build, local regtest node:
+
+                         Core 31       Core 30
+    ------------------------------------------------
+    sendrawtransaction   1.936 ms      1.716 ms    mean
+    mirror visibility    995.455 ms    995.779 ms  mean
+    mirror p50           996.340 ms    995.597 ms
+    mirror p95           1000.442 ms   1004.300 ms
+    mirror p99           1004.897 ms   1005.588 ms
+
+The result is effectively the same on Core 30 and 31: a transaction submitted
+just after the previous template update takes about one second to reach the JDS
+mirror. A debug run measured less than 1 ms from waitNext returning to the
+mirror being updated, so nearly all of the delay is waiting for the next
+template update.
+
+This measures mirror synchronization time, not the full
+ProvideMissingTransactions round trip.
+
+Run from integration-tests/:
+
+    SV2_JDP_BENCH_SAMPLES=20 RUST_LOG=error cargo test --release \
+      --test bitcoin_core_ipc_jdp_mempool_benchmark \
+      jdp_mempool_mirror_latency_v31x \
+      -- --ignored --nocapture --test-threads=1
+
+Replace v31x with v30x to test Core 30.
+
+Tested on e96c81fe64b85d4d52e7cbcbfd92eb9e0246a00e, Intel i7-8650U,
+Linux x86_64.

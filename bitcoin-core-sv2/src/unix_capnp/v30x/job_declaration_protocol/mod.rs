@@ -19,7 +19,7 @@ use bitcoin_capnp_types::{
     proxy_capnp::{thread::Client as ThreadIpcClient, thread_map::Client as ThreadMapIpcClient},
 };
 use bitcoin_capnp_types_v30 as bitcoin_capnp_types;
-use std::{cell::RefCell, path::Path, rc::Rc};
+use std::{cell::RefCell, path::Path, rc::Rc, time::Instant};
 use stratum_core::bitcoin::{Block, consensus::deserialize};
 use tokio::net::UnixStream;
 use tokio_util::compat::*;
@@ -244,6 +244,7 @@ impl BitcoinCoreSv2JDP {
 
     /// Updates the mempool mirror with the current block template from Bitcoin Core.
     async fn update_mempool_mirror(&self) -> Result<(), BitcoinCoreSv2JDPError> {
+        let total_started = Instant::now();
         let mut get_block_request = self
             .current_template_ipc_client
             .borrow()
@@ -253,6 +254,7 @@ impl BitcoinCoreSv2JDP {
             .get_context()?
             .set_thread(self.thread_ipc_client.clone());
 
+        let get_block_started = Instant::now();
         let block_bytes = get_block_request
             .send()
             .promise
@@ -260,11 +262,28 @@ impl BitcoinCoreSv2JDP {
             .get()?
             .get_result()?
             .to_vec();
+        let get_block_elapsed = get_block_started.elapsed();
+
         debug!("Deserializing block ({} bytes)", block_bytes.len());
+        let deserialize_started = Instant::now();
         let block: Block =
             deserialize(&block_bytes).map_err(BitcoinCoreSv2JDPError::FailedToDeserializeBlock)?;
+        let deserialize_elapsed = deserialize_started.elapsed();
 
+        let mirror_update_started = Instant::now();
+        let transaction_count = block.txdata.len().saturating_sub(1);
         self.mempool_mirror.borrow_mut().update(&block);
+        let mirror_update_elapsed = mirror_update_started.elapsed();
+
+        debug!(
+            get_block_ms = get_block_elapsed.as_secs_f64() * 1_000.0,
+            deserialize_ms = deserialize_elapsed.as_secs_f64() * 1_000.0,
+            mirror_update_ms = mirror_update_elapsed.as_secs_f64() * 1_000.0,
+            total_ms = total_started.elapsed().as_secs_f64() * 1_000.0,
+            block_bytes = block_bytes.len(),
+            transaction_count,
+            "JDP mempool mirror refresh timing"
+        );
 
         Ok(())
     }
